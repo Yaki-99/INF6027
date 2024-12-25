@@ -1,1 +1,256 @@
+#--------------------
+# financial-sector-analysis/code/analysis.R
+#--------------------
 
+#--------------------
+# 1. Environment Setup
+#--------------------
+# Set working directory to project root
+setwd("path/to/financial-sector-analysis")
+
+# Load required packages
+library(tidyverse)
+library(readr)
+library(ggplot2) 
+library(dplyr)
+library(scales)
+library(gridExtra)
+library(kableExtra)
+library(corrplot)
+
+#--------------------
+# 2. Data Import and Preprocessing
+#--------------------
+# Read data from data folder
+data_2014 <- read_csv("data/2014_Financial_Data.csv") %>% mutate(Year = 2014)
+data_2015 <- read_csv("data/2015_Financial_Data.csv") %>% mutate(Year = 2015)
+data_2016 <- read_csv("data/2016_Financial_Data.csv") %>% mutate(Year = 2016)
+data_2017 <- read_csv("data/2017_Financial_Data.csv") %>% mutate(Year = 2017)
+data_2018 <- read_csv("data/2018_Financial_Data.csv") %>% mutate(Year = 2018)
+
+# Combine all data
+all_data <- bind_rows(data_2014, data_2015, data_2016, data_2017, data_2018)
+
+# Outlier removal function
+remove_outliers <- function(x, na.rm = TRUE) {
+  qnt <- quantile(x, probs=c(.05, .95), na.rm = na.rm)
+  H <- 1.5 * IQR(x, na.rm = na.rm)
+  y <- x
+  y[x < (qnt[1] - H)] <- NA
+  y[x > (qnt[2] + H)] <- NA
+  y
+}
+
+# Create cleaned dataset
+clean_data <- all_data %>%
+  group_by(Sector) %>%
+  mutate(across(c(Revenue, `Revenue Growth`, `Net Profit Margin`, 
+                  returnOnEquity, `Free Cash Flow`), remove_outliers)) %>%
+  ungroup()
+
+#--------------------
+# 3. Industry Distribution Analysis
+#--------------------
+# Calculate sector distribution statistics
+sector_summary <- clean_data %>%
+  group_by(Sector) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+p_dist <- ggplot(sector_summary, aes(x = reorder(Sector, -count), y = count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = count), vjust = -0.5, size = 3.5) +   
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Distribution of Companies Across Sectors",
+       x = "Sector",
+       y = "Number of Companies") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+#--------------------
+# 4. Financial Metrics Analysis
+#--------------------
+# Calculate key metrics by sector
+sector_metrics <- clean_data %>%
+  group_by(Sector) %>%
+  summarise(
+    Mean_Revenue = mean(Revenue, na.rm = TRUE) / 1e9,
+    Mean_Profit_Margin = mean(`Net Profit Margin`, na.rm = TRUE)
+  )
+
+# Create financial metrics distribution plots
+p1 <- ggplot(sector_metrics, aes(x = reorder(Sector, Mean_Revenue), y = Mean_Revenue)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(Mean_Revenue, 2)), vjust = -0.5, size = 3.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Revenue by Sector (Billion $)",
+       x = "Sector",
+       y = "Revenue (Billion $)") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+p2 <- ggplot(sector_metrics, aes(x = reorder(Sector, Mean_Profit_Margin), y = Mean_Profit_Margin)) +
+  geom_bar(stat = "identity", fill = "darkred") +
+  geom_text(aes(label = scales::percent(Mean_Profit_Margin, accuracy = 0.1)), 
+            vjust = -0.5, size = 3.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Profit Margin by Sector",
+       x = "Sector",
+       y = "Profit Margin") +
+  scale_y_continuous(labels = scales::percent,
+                     expand = expansion(mult = c(0, 0.1)))
+
+#--------------------
+# 5. Revenue Growth and Cash Flow Analysis
+#--------------------
+# Process financial metrics
+price_metrics <- clean_data %>%
+  group_by(Sector) %>%
+  summarise(
+    Avg_Revenue_Growth = mean(`Revenue Growth`, na.rm = TRUE),
+    Avg_Profit_Margin = mean(`Net Profit Margin`, na.rm = TRUE),
+    Avg_ROE = mean(returnOnEquity, na.rm = TRUE),
+    Avg_FCF = mean(`Free Cash Flow`, na.rm = TRUE)/1e9
+  )
+
+# Create revenue growth and cash flow visualizations
+p5 <- ggplot(price_metrics, aes(x = reorder(Sector, Avg_Revenue_Growth), y = Avg_Revenue_Growth)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = scales::percent(Avg_Revenue_Growth, accuracy = 0.1)), 
+            vjust = -0.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Revenue Growth by Sector",
+       x = "Sector",
+       y = "Revenue Growth") +
+  scale_y_continuous(labels = scales::percent,
+                     expand = expansion(mult = c(0, 0.2)))
+
+p6 <- ggplot(price_metrics, aes(x = reorder(Sector, Avg_FCF), y = Avg_FCF)) +
+  geom_bar(stat = "identity", fill = "darkred") +
+  geom_text(aes(label = round(Avg_FCF, 2)), vjust = -0.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Free Cash Flow by Sector (Billion $)",
+       x = "Sector",
+       y = "Free Cash Flow (Billion $)") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+
+#--------------------
+# 6. Heatmap Analysis
+#--------------------
+# Calculate annual industry growth rates
+trend_heatmap <- clean_data %>%
+  group_by(Year, Sector) %>%
+  summarise(
+    avg_growth = mean(`Revenue Growth`, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Create heatmap
+p_heatmap <- ggplot(trend_heatmap, aes(x = factor(Year), y = Sector, fill = avg_growth)) +
+  geom_tile() +
+  scale_fill_gradient2(
+    low = "red", 
+    mid = "white", 
+    high = "green",
+    midpoint = 0,
+    labels = scales::percent,
+    name = "Revenue\nGrowth Rate"
+  ) +
+  geom_text(aes(label = scales::percent(avg_growth, accuracy = 0.1)), size = 3) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    axis.text.y = element_text(hjust = 1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    title = "Revenue Growth Heatmap (2014-2018)",
+    subtitle = "Showing average growth rate by sector and year",
+    x = "Year",
+    y = "Sector"
+  )
+
+#--------------------
+# 7. Summary Tables
+#--------------------
+# Industry summary table
+industry_summary <- clean_data %>%
+  group_by(Sector) %>%
+  summarise(
+    Num_Companies = n_distinct(...1),
+    Avg_Revenue_B = mean(Revenue/1e9, na.rm = TRUE),
+    Avg_Growth = mean(`Revenue Growth`, na.rm = TRUE),
+    Avg_Profit_Margin = mean(`Net Profit Margin`, na.rm = TRUE),
+    Avg_FCF_B = mean(`Free Cash Flow`/1e9, na.rm = TRUE)
+  ) %>%
+  arrange(desc(Avg_Revenue_B)) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+# Yearly summary table
+yearly_summary <- clean_data %>%
+  group_by(Year) %>%
+  summarise(
+    Active_Companies = n_distinct(...1),
+    Total_Revenue_B = sum(Revenue, na.rm = TRUE)/1e9,
+    Median_Growth = median(`Revenue Growth`, na.rm = TRUE),
+    Median_Profit_Margin = median(`Net Profit Margin`, na.rm = TRUE),
+    Total_FCF_B = sum(`Free Cash Flow`, na.rm = TRUE)/1e9
+  ) %>%
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+# Create formatted tables
+industry_table <- industry_summary %>%
+  kbl(caption = "Industry Performance Summary (2014-2018)",
+      align = c('l', 'c', 'r', 'r', 'r', 'r'),
+      format.args = list(big.mark = ",")) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#2c3e50") %>%
+  column_spec(1, bold = TRUE) %>%
+  add_header_above(c(" " = 1, "Scale" = 1, "Financial Metrics" = 4)) %>%
+  footnote("All monetary values are in billions of USD. Data has been cleaned for outliers.")
+
+yearly_table <- yearly_summary %>%
+  kbl(caption = "Yearly Performance Summary",
+      align = c('c', 'c', 'r', 'r', 'r', 'r'),
+      format.args = list(big.mark = ",")) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#2c3e50") %>%
+  column_spec(1, bold = TRUE) %>%
+  add_header_above(c(" " = 1, "Scale" = 1, "Financial Metrics" = 4)) %>%
+  footnote("All monetary values are in billions of USD. Medians are used for growth and margin metrics.")
+
+#--------------------
+# 8. Save Results
+#--------------------
+# Save plots
+ggsave("results/sector_distribution.png", p_dist)
+ggsave("results/financial_metrics.png", arrangeGrob(p1, p2, ncol=2))
+ggsave("results/growth_cashflow.png", arrangeGrob(p5, p6, ncol=2))
+ggsave("results/growth_heatmap.png", p_heatmap)
+
+# Save data tables
+write_csv(industry_summary, "results/industry_summary.csv")
+write_csv(yearly_summary, "results/yearly_summary.csv")
+
+# Display results
+print(p_dist)
+grid.arrange(p1, p2, ncol = 2)
+grid.arrange(p5, p6, ncol = 2)
+print(p_heatmap)
+print(industry_table)
+print(yearly_table)
